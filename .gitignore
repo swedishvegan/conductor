@@ -1,6 +1,8 @@
+
 # (1) Ignore specific folders
 vscode-syntax-highlighting/
 docs/
+bin/*
 
 # (2) Ignore all CMake-related files and folders except CMakeLists.txt
 # Ignore CMake cache, generated files, and build files
