@@ -1,0 +1,17 @@
+# (1) Ignore specific folders
+vscode-syntax-highlighting/
+docs/
+
+# (2) Ignore all CMake-related files and folders except CMakeLists.txt
+# Ignore CMake cache, generated files, and build files
+**/CMakeCache.txt
+**/CMakeFiles/
+**/cmake_install.cmake
+**/Makefile
+**/*.cmake
+
+# But do NOT ignore CMakeLists.txt
+!**/CMakeLists.txt
+
+# (3) Ignore any subdirectory named 'hll' at any depth
+**/hll/
