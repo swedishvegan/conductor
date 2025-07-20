@@ -17,3 +17,6 @@ bin/*
 
 # (3) Ignore any subdirectory named 'hll' at any depth
 **/hll/
+
+# (4) Ignore pdfs
+*.pdf
