@@ -9,6 +9,7 @@
 #include <csignal>
 #include "defs.hpp"
 #include "json.hpp"
+#include "server.hpp"
 
 // SIGINT handler that exits cleanly
 void handle_sigint(int) {
@@ -48,7 +49,7 @@ void copyfiles(const std::vector<std::string>& includes, const std::string& dir,
             if (entry->d_type == DT_REG && name.size() > 4) {
                 if (hllonly && name.substr(name.size() - 4) != ".hll") continue;
                 std::ifstream src(path + "/" + name, std::ios::binary);
-                std::ofstream dst(dir + "/" + name + (hllonly ? "" : ".global"), std::ios::binary);
+                std::ofstream dst(dir + "/" + (hllonly ? "" : "global.") + name, std::ios::binary);
                 dst << src.rdbuf();
             }
         }
@@ -255,11 +256,16 @@ int main(int argc, char** argv) { // chatgpt
     std::signal(SIGINT, handle_sigint);
 
     if (argc < 2) {
-        std::cerr << "No command provided. Usage [create/run/resume/query/delete]\n";
+        std::cerr << "No command provided. Usage [create/run/resume/query/delete/killserver]\n";
         return 1;
     }
 
     std::string cmd = argv[1];
+
+    if (cmd == "killserver") {
+        kill_server();
+        return 0;
+    }
 
     try {
         if (cmd == "create") {
@@ -305,3 +311,64 @@ int main(int argc, char** argv) { // chatgpt
 
     return 0;
 }
+/*
+#include "server.hpp"
+
+void handler(int) {
+    std::cout << std::endl;
+    std::exit(0);
+}
+
+#include <chrono>
+
+class Timer {
+public:
+    Timer() {
+        start_time = std::chrono::steady_clock::now();
+    }
+
+    // Returns elapsed time in milliseconds since the timer was constructed
+    long long check_time() const {
+        auto now = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time);
+        return duration.count();
+    }
+
+private:
+    std::chrono::steady_clock::time_point start_time;
+};
+
+int mainn(int argc, char** argv) { // DUMMY MAIN FUNCTION -- TEST SERVER FUNCTIONALITY
+
+    if (std::string(argv[1]) == "--kill") {
+        kill_server();
+        return 0;
+    }
+
+    std::signal(SIGINT, handler);
+
+    try {
+        
+        post(R"({"me":"warmup"})");
+
+        const int N = 2000;
+        auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < N; ++i)
+            post(R"({"me":"dummy"})");
+        auto end = std::chrono::steady_clock::now();
+
+        auto total_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        std::cout << "Avg µs/req: " << (double)total_us / N << '\n';
+
+    }
+    catch (const std::exception& e) { 
+        
+        std::cout << "Error: " << e.what() << "\n"; 
+        return 1;
+        
+    }
+
+    return 0;
+
+}
+*/

@@ -171,7 +171,7 @@ struct interpreter {
                             dgraph,
                             ctx,
                             action,
-                            std::dynamic_pointer_cast<inst_awaitaction>(in)->ak
+                            epsilon // std::dynamic_pointer_cast<inst_awaitaction>(in)->ak
                         );
                         break;
                     }

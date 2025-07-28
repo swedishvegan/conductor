@@ -13,6 +13,7 @@ set(SOURCES
     json.cpp
     interpreter.cpp
     api.cpp
+    unix_socket_client.cpp
 )
 
 # Find libcurl

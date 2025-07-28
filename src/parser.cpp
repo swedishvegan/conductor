@@ -1,5 +1,7 @@
 #include "defs.hpp"
 #include "rex.hpp"
+#include "json.hpp"
+#include "server.hpp"
 
 extern void lex(std::vector<ptoklex>&, const std::string&, const std::string&); // lexer.cpp
 void analyze(dialogue&, const std::string&); // analysis.cpp
@@ -52,9 +54,9 @@ std::string getname(const std::string& code, int start, int len, rex& r) {
 std::string invalid_target(std::string filename, std::string type, std::string name, int line) {
 
     return (
-        "Failed to parse " +
+        "Failed to parse `" +
         filename +
-        "\nInvalid " + 
+        "`\nInvalid " + 
         type +
         " name '" + 
         name + 
@@ -64,9 +66,23 @@ std::string invalid_target(std::string filename, std::string type, std::string n
 
 }
 
+pjson genactionjson(const std::string& agent, int line, const std::string& name, bool isuser, pjson args) {
+
+    auto j = json::makeDict();
+    auto& d = j->getDict();
+
+    d["agent"] = json::makeString(agent);
+    d["line"] = json::makeInt(line);
+    d["name"] = json::makeString(name);
+    d["isuser"] = json::makeBool(isuser);
+    d["args"] = args;
+
+    return j;
+
+}
+
 nameregistry dialogue::contextnames;
 nameregistry dialogue::agentnames;
-nameregistry dialogue::commandnames;
 
 std::unique_ptr<rex> r;
 std::unique_ptr<rex> pa;
@@ -108,14 +124,14 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
 
                 std::string cname = getname(dial.code, ptl.start, ptl.len, *r);
                 int lid = dialogue::contextnames.registername(cname);
-                if (lid < 0) throw std::runtime_error(("Failed to parse " + aname) + "\nContext '" + cname + "' on line " + std::to_string(ptl.line) + " is duplicated");
+                if (lid < 0) throw std::runtime_error(("Failed to parse `" + aname) + "`\nContext '" + cname + "' on line " + std::to_string(ptl.line) + " is duplicated");
 
             }
             else if (expecting > 0) {
 
                 std::string lname = getname(dial.code, ptl.start, ptl.len, *r);
                 int lid = dial.labelnames.registername(lname);
-                if (lid < 0) throw std::runtime_error(("Failed to parse " + aname) + "\nLabel '" + lname + "' on line " + std::to_string(ptl.line) + " is duplicated");
+                if (lid < 0) throw std::runtime_error(("Failed to parse `" + aname) + "`\nLabel '" + lname + "' on line " + std::to_string(ptl.line) + " is duplicated");
                 if (expecting == 2) dial.entrypoints.insert(lid);
 
             }
@@ -129,8 +145,11 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
         }
 
     }
-
+    std::cout << "Done discovering symbols!\n";
     // parse code
+
+    pjson actionstocheck = json::makeList(); // action commands whose validity will be checked in a final pass by the server
+    auto& atclist = actionstocheck->getList();
 
     for (auto& it : d) {
 
@@ -139,11 +158,13 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
         const auto& tokens = dial.tokens;
         std::string idnamelh, idnamerh;
         int idlh, idrh;
+        std::shared_ptr<inst> curaction;
+        pjson curactionjson;
 
         for (int i = 0; i < tokens.size(); i++) {
 
             auto ptl = tokens[i];
-
+            std::cout << "\tParsing " << (int)ptl.tok <<  " at line " << ptl.line << "\n";
             // collect identifier name(s) and textblock content if applicable
 
             switch (ptl.tok) {
@@ -185,7 +206,7 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                         invalid_target(aname, "agent label", idnamerh, ptl.line)
                     );
                     if (d[idlh].entrypoints.find(idrh) == d[idlh].entrypoints.end()) throw std::runtime_error(
-                        "Failed to parse " + aname + "\nCannot enter on private label '" + idnamerh + "' on line " + std::to_string(ptl.line)
+                        "Failed to parse `" + aname + "`\nCannot enter on private label '" + idnamerh + "' on line " + std::to_string(ptl.line)
                     );
                     break;
 
@@ -195,17 +216,6 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                     i++;
                     idnamelh = -1;
 
-                    if (tokens[i].tok == action && tokens[i + 1].tok == customcmd) {
-
-                        auto ptln = tokens[i + 1];
-                        idnamelh = getname(dial.code, ptln.start, ptln.len, *r);
-                        idlh = dialogue::commandnames.query(idnamelh);
-                        if (idlh < 0) throw std::runtime_error(
-                            invalid_target(aname, "command", idnamelh, ptl.line)
-                        );
-                        break;
-
-                    }
                     if (tokens[i].tok != branch) break;
 
                 }
@@ -248,7 +258,7 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                     } i--;
 
                     if (wsp->match(idnamelh.c_str())) throw std::runtime_error(
-                        "Failed to parse " + aname + "\nTextblock defined at line " + std::to_string(ptl.line) + " has no content"
+                        "Failed to parse `" + aname + "`\nTextblock defined at line " + std::to_string(ptl.line) + " has no content"
                     );
 
                 }
@@ -309,7 +319,8 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                             break;
                         }
                         case action: {
-                            dial.instructions.push_back(std::make_shared<inst_awaitaction>(tokens[i + 1].tok, idlh));
+                            curaction = std::make_shared<inst_awaitaction>();
+                            dial.instructions.push_back(curaction);
                             break;
                         }
                         case branch: {
@@ -318,6 +329,13 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
 
                     }
 
+                    break;
+
+                }
+                case useraction: {
+
+                    curaction = std::make_shared<inst_action>();
+                    dial.instructions.push_back(curaction);
                     break;
 
                 }
@@ -332,13 +350,121 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                 case prompt: {
 
                     dial.instructions.push_back(std::make_shared<inst>(ptl.tok));
+                    break;
+
+                }
+                case actionidentifier:
+                case finalactionidentifier: {
+
+                    std::string actname = getname(dial.code, ptl.start, ptl.len, *r);
+                    actiondata data { actname, json::makeDict() };
+
+                    if (curaction->tok == useraction)
+                        std::dynamic_pointer_cast<inst_action>(curaction)->actions.push_back(data);
+                    else 
+                        std::dynamic_pointer_cast<inst_awaitaction>(curaction)->actions.push_back(data);
+
+                    atclist.push_back(
+                        genactionjson(
+                            aname,
+                            ptl.line,
+                            actname,
+                            curaction->tok == useraction,
+                            data.args
+                        )
+                    );
+
+                    break;
+
+                }
+                case actionidentifierwithargs: {
+
+                    std::string actname = getname(dial.code, ptl.start, ptl.len, *r);
+                    actiondata data { actname, json::makeDict() };
+                    std::string key;
+                    
+                    while (true) {
+
+                        i++;
+                        if (i >= tokens.size()) break;
+
+                        auto ptln = tokens[i];
+
+                        if (ptln.tok < actionargnewline || ptln.tok > actionargcontent) break;
+
+                        if (ptln.tok == actionargnewline) continue;
+
+                        else if (ptln.tok == actionargname) key = getname(dial.code, ptln.start, ptln.len, *r);
+
+                        else { // actionargcontent 
+                            try {
+                                auto value = json::loadFromString(
+                                    dial.code.substr(ptln.start, ptln.len)
+                                );
+                                data.args->getDict()[key] = value;
+                            }
+                            catch (...) {
+                                throw std::runtime_error(
+                                    "Failed to parse `" +
+                                    aname + 
+                                    "`\nValue of argument `" +
+                                    key +
+                                    "` at line " +
+                                    std::to_string(ptln.line) +
+                                    " is not valid JSON"
+                                );
+                            }
+                        }
+
+                    } i--;
+
+                    auto& actions = 
+                        (curaction->tok == useraction)
+                        ? std::dynamic_pointer_cast<inst_action>(curaction)->actions
+                        : 
+                        std::dynamic_pointer_cast<inst_awaitaction>(curaction)->actions
+                    ;
+                    std::cout << "\t\tActions size = " << actions.size() << "\n";
+                    for (const auto& d : actions)
+                        if (d.aname == actname)
+                            throw std::runtime_error(
+                                "Failed to parse `" +
+                                aname + "`\nDuplicate action `" +
+                                actname + "` at line " +
+                                std::to_string(ptl.line)
+                            );
+
+                    actions.push_back(data);
+
+                    atclist.push_back(
+                        genactionjson(
+                            aname,
+                            ptl.line,
+                            actname,
+                            curaction->tok == useraction,
+                            data.args
+                        )
+                    );
+
+                    break;
 
                 }
             }
         }
     }
+    std::cout << "Done parsing!\n";
+    // send parsed actions to server for validation
+    auto data = json::makeDict();
+    data->getDict()["request"] = json::makeString("validate_actions");
+    data->getDict()["data"] = actionstocheck;
 
-    for (auto& it : d)
+    pjson response = json::loadFromString(post(data->print()));
+    if (response->getDict()["status"]->getString() == "err")
+        throw std::runtime_error(
+            response->getDict()["reason"]->getString()
+        );
+
+    for (auto& it : d) // static analysis
         analyze(it.second, dialogue::agentnames.queryname(it.first));
 
 }

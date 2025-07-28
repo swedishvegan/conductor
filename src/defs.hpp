@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include "json.hpp"
 
 // filepath defs
 
@@ -19,9 +20,10 @@
 
 // lexer defs
 
-#define rsp "( |\t)+"
+#define rspc "( |\t)+"
 #define rnewln "( |\t)*\n"
 #define rcmnt "( |\t)*#.*\n"
+#define rnewlncmnt "( |\t)*(#.*)?\n"
 #define rident "(a-z|A-Z|_)(a-z|A-Z|0-9|_)*"
 #define ridentterm "( |\t|\n|(#.*\n))"
 
@@ -29,12 +31,12 @@ enum ptok : uint8_t {
     getreply, pause_, prompt, _simplecmd_tok,
     label, publiclabel, goto_, loadctx, storectx, _referenceidentifier_tok,
     autoprompt, info, _referencetextblock_tok,
-    list, read_, write_, append, listmodules, createmodule, customcmd, _actiontype_tok,
     call, invoke, recurse, _controlflow_tok,
     await,
     reply,
     action,
     branch,
+    useraction,
     userbranch,
     identifier,
     firstidentifier,
@@ -44,6 +46,14 @@ enum ptok : uint8_t {
     textblockindent,
     textblockcomment,
     textblocknewline,
+    actionidentifier,
+    actionidentifierwithargs,
+    finalactionidentifier,
+    actionargnewline,
+    actionargname,
+    actionargcontent,
+    actioncomma,
+    actionspace,
     newline,
     eof,
     epsilon,
@@ -97,7 +107,6 @@ struct inst { // base instruction class
 struct dialogue { // master container for a parsed HLL dialogue
     static nameregistry contextnames;
     static nameregistry agentnames;
-    static nameregistry commandnames;
     nameregistry labelnames;
     std::vector<ptoklex> tokens;
     std::vector<std::shared_ptr<inst>> instructions;
@@ -106,6 +115,11 @@ struct dialogue { // master container for a parsed HLL dialogue
     std::string code; // raw code
 };
 using dialogues = std::map<int, dialogue>;
+
+struct actiondata { // represents an action call with default arguments encoded in JSON
+    std::string aname;
+    pjson args;
+};
 
 // instruction specialties that need specific data attached to them
 
@@ -150,14 +164,18 @@ struct inst_awaitreply : public inst_await {
 };
 
 struct inst_awaitaction : public inst_await {
-    ptok ak;
-    int cmid; // if custom command
-    inst_awaitaction(ptok ak, int cmid) : inst_await(action), ak(ak), cmid(cmid) {}
+    std::vector<actiondata> actions;
+    inst_awaitaction() : inst_await(action) {}
 };
 
 struct inst_awaitbranch : public inst_await {
     int lidyes, lidno;
     inst_awaitbranch(int lidyes, int lidno) : inst_await(branch), lidyes(lidyes), lidno(lidno) {}
+};
+
+struct inst_action : public inst {
+    std::vector<actiondata> actions;
+    inst_action() : inst(useraction) {}
 };
 
 struct inst_branch : public inst {

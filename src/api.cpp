@@ -148,13 +148,13 @@ void initcommands() {
     cmd_createmodule = json::loadFromString(CREATE_MODULE_COMMAND);
     cmd_branch = json::loadFromString(ANSWER_COMMAND);
 
-    commandmap[list] = cmd_list;
+    /*commandmap[list] = cmd_list;
     commandmap[read_] = cmd_read;
     commandmap[write_] = cmd_write;
     commandmap[append] = cmd_append;
     commandmap[listmodules] = cmd_listmodules;
     commandmap[createmodule] = cmd_createmodule;
-    commandmap[branch] = cmd_branch;
+    commandmap[branch] = cmd_branch;*/
 
     yes = json::makeInt(0);
     genconfig = json::loadFromString("{\"thinkingConfig\":{\"include_thoughts\": false, \"thinkingBudget\": 0}}");
@@ -207,7 +207,7 @@ pjson runcommand(
 
     switch (ak) {
 
-        case list: {
+        /*case list: {
 
             std::string modname = argexists(args, "module") ? args["module"]->getString() : "";
             if (modname == "") modname = curmodule;
@@ -422,7 +422,7 @@ pjson runcommand(
             failreason = "Expected YES/NO for answer.";
             return nullptr;
 
-        }
+        }*/
 
     }
 
@@ -443,12 +443,12 @@ bool apirequest(const std::string& proot, const std::string& curmodule, pjson dg
 
             switch (ak) {
 
-                case list: { cmdname = "LIST"; break; }
+                /*case list: { cmdname = "LIST"; break; }
                 case read_: { cmdname = "READ"; break; }
                 case write_: { cmdname = "WRITE"; break; }
                 case append: { cmdname = "APPEND"; break; }
                 case listmodules: { cmdname = "LIST_MODULES"; break; }
-                case createmodule: { cmdname = "CREATE_MODULE"; break; }
+                case createmodule: { cmdname = "CREATE_MODULE"; break; }*/
 
             }
             break;
