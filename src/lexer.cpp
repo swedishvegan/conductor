@@ -41,7 +41,7 @@ constexpr ptokpat pats[] = {
         actionidentifierwithargs, "( |\t)*" rident ":" rnewlncmnt sep
         finalactionidentifier, "( |\t)*" rident ridentterm sep
         actionargnewline, rnewlncmnt sep
-        actionargname, rspc rident rspc "=" sep
+        actionargname, rspc rident "( |\t)*=" sep
         actionargcontent, ".*\n" sep
         actioncomma, "," sep
         actionspace, rspc sep

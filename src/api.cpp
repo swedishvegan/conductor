@@ -430,35 +430,44 @@ pjson runcommand(
 
 }
 
-bool apirequest(const std::string& proot, const std::string& curmodule, pjson dgraph, pjson ctx, ptok k, ptok ak) {
+extern pjson ALL_LEGAL_COMMANDS;
+void loadcommands();
 
-    if (!cmd_list) initcommands();
+pjson ALL_LEGAL_COMMANDS_V;
 
-    std::string cmdname;
+void gencmdstr(std::string& s, pjson expecting) {
 
-    switch (k) {
+    auto& l = expecting->getList();
 
-        case reply: break;
-        case action: {
-
-            switch (ak) {
-
-                /*case list: { cmdname = "LIST"; break; }
-                case read_: { cmdname = "READ"; break; }
-                case write_: { cmdname = "WRITE"; break; }
-                case append: { cmdname = "APPEND"; break; }
-                case listmodules: { cmdname = "LIST_MODULES"; break; }
-                case createmodule: { cmdname = "CREATE_MODULE"; break; }*/
-
-            }
-            break;
-
-        }
-        case branch: { cmdname = "ANSWER"; break; }
+    for (int i = 0; i < l.size(); i++) {
+        
+        auto cmd = l[i];
+        s += "`" + cmd->getString() + "`";
+        if (i < l.size() - 1) s += ", ";
 
     }
 
-    bool needscall = cmdname.size() > 0;
+}
+
+bool apirequest(const std::string& proot, const std::string& curmodule, pjson dgraph, pjson ctx, ptok k, const std::vector<actiondata>& actions) {
+
+    if (!ALL_LEGAL_COMMANDS) {
+        loadcommands();
+        for (auto cmd : ALL_LEGAL_COMMANDS->getDict()) ALL_LEGAL_COMMANDS_V->getList().push_back(json::makeString(cmd));
+    }
+
+    pjson expecting;
+    
+    if (actions.size() == 0) expecting = ALL_LEGAL_COMMANDS_V;
+
+    else {
+    
+        expecting = json::makeList();
+        for (const auto& a : actions) expecting->getList().push_back(json::makeString(a.aname));
+
+    }
+
+    bool needscall = k != reply;
 
     ctx->getList().push_back(gencontextelement(
             needscall

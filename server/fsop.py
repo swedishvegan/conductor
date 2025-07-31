@@ -179,7 +179,7 @@ CREATE_MODULE_COMMAND = {
     }
 }
 
-answer_command = {
+ANSWER_COMMAND = {
     "name": "answer",
     "description": "Answer either `yes` or `no`",
     "parameters": {
@@ -197,26 +197,17 @@ answer_command = {
 DEFAULT_COMMANDS = {
     "no_op": NO_OP_COMMAND,
     "list": LIST_COMMAND,
+    "read": READ_COMMAND,
     "read_paginated": READ_PAGINATED_COMMAND,
     "write": WRITE_COMMAND,
     "append": APPEND_COMMAND,
     "edit_page": EDIT_PAGE_COMMAND,
     "query_modules": QUERY_MODULES_COMMAND,
-    "create_module": CREATE_MODULE_COMMAND
+    "create_module": CREATE_MODULE_COMMAND,
+    "answer": ANSWER_COMMAND
 } # `answer` is not considered a command; it is used for branching which is not a callable action
 
 PAGE_SIZE = 50
-
-def _gen_context_element(text, role):
-
-    if role != "user" and role != "model": raise RuntimeError(f"Invalid role: {role}")
-
-    return {
-        "role": role,
-        "parts": [
-            { "text": str(text) }
-        ]
-    }
 
 def _get_arg(res, arg, default=""):
     return res[arg] if arg in res.keys() else default
@@ -297,7 +288,16 @@ def _setup_fsop(res, module, dgraph, accessty):
     if len(paths) == 0: return None, [f"No files matched the pattern `{module_arg}/{path_arg}`."]
     return paths, None
 
-def cmd_list(res, module, dgraph):
+# implementations of default commands
+# some arguments are dummy arguments in many 
+# functions, but they're there so every
+# function has the same API can can be called
+# homogenously
+
+def cmd_no_op(proot, res, module, dgraph):
+    return [ "Successfully done nothing." ]
+
+def cmd_list(proot, res, module, dgraph):
     
     module_arg = _get_arg(res, "module", module).strip()
     targets = _get_modules(module, module_arg, dgraph, "r")
@@ -316,7 +316,7 @@ def cmd_read(proot, res, module, dgraph):
 
     return [f"Contents of file `{path[0]}/{path[1]}`:\n" + _read_file(proot, path[0], path[1]) for path in paths]
 
-def cmd_write_append(proot, res, module, dgraph, accessty):
+def _cmd_write_append(proot, res, module, dgraph, accessty):
 
     paths, res = _setup_fsop(res, module, dgraph, accessty)
     if res is not None: return res
@@ -325,6 +325,12 @@ def cmd_write_append(proot, res, module, dgraph, accessty):
 
     for path in paths: _write_file(proot, path[0], path[1], content, accessty)
     return []
+
+def cmd_write(proot, res, module, dgraph):
+    return _cmd_write_append(proot, res, module, dgraph, "w")
+
+def cmd_append(proot, res, module, dgraph):
+    return _cmd_write_append(proot, res, module, dgraph, "a")
 
 def cmd_read_paginated(proot, res, module, dgraph):
 
@@ -357,7 +363,7 @@ def cmd_edit_page(proot, res, module, dgraph):
 
     return []
 
-def cmd_query_modules(proot, module, dgraph):
+def cmd_query_modules(proot, res, module, dgraph):
 
     deps = dgraph["dependencies"][module]
     children = dgraph["children"][module]
@@ -371,7 +377,7 @@ def cmd_query_modules(proot, module, dgraph):
         "`, `".join(allmodules) + "`"
     )]
 
-def cmd_create_module(res, module, dgraph):
+def cmd_create_module(proot, res, module, dgraph):
 
     module_arg = _get_arg(res, "module_name").strip()
 
@@ -391,3 +397,25 @@ def cmd_create_module(res, module, dgraph):
     dgraph["files"][module_arg] = []
 
     return []
+
+def cmd_answer(proot, res, module, dgraph):
+
+    answer_arg = _get_arg(res, "answer").strip().lower()
+    if len(answer_arg) == 0 or answer_arg.isspace(): raise RuntimeError("Answer is missing or empty.")
+
+    if answer_arg == "yes": return True
+    elif answer_arg == "no": return False
+    else: raise RuntimeError("Answer must be either `yes` or `no`.")
+
+DEFAULT_ACTIONS = {
+    "no_op": cmd_no_op,
+    "list": cmd_list,
+    "read": cmd_read,
+    "write": cmd_write,
+    "append": cmd_append,
+    "read_paginated": cmd_read_paginated,
+    "edit_page": cmd_edit_page,
+    "query_modules": cmd_query_modules,
+    "create_module": cmd_create_module,
+    "answer": cmd_answer
+}

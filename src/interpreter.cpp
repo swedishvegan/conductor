@@ -6,7 +6,7 @@
 #include "rex.hpp"
 #include "json.hpp"
 
-extern bool apirequest(const std::string& proot, const std::string& curmodule, pjson dgraph, pjson ctx, ptok k, ptok ak);
+extern bool apirequest(const std::string& proot, const std::string& curmodule, pjson dgraph, pjson ctx, ptok k, const std::vector<actiondata> actions);
 extern pjson gencontextelement(const std::string& text, bool isuser = true);
 extern pjson gendefaultcontext(const std::string& module);
 
@@ -161,25 +161,34 @@ struct interpreter {
                 switch (x->k) {
 
                     case reply: {
-                        apirequest(proot, curmodule, dgraph, ctx, reply, epsilon);
+
+                        static std::vector<actiondata> no_actions; // this is so dumb
+                        apirequest(proot, curmodule, dgraph, ctx, reply, no_actions);
                         break;
+
                     }
                     case action: {
+                        
                         apirequest(
                             proot,
                             curmodule,
                             dgraph,
                             ctx,
                             action,
-                            epsilon // std::dynamic_pointer_cast<inst_awaitaction>(in)->ak
+                            std::dynamic_pointer_cast<inst_awaitaction>(in)->actions
                         );
                         break;
+
                     }
                     case branch: {
-                        bool option = apirequest(proot, curmodule, dgraph, ctx, branch, epsilon);
+
+                        static std::vector<actiondata> answer_action = actiondata { "answer", json::makeDict() };
+
+                        bool option = apirequest(proot, curmodule, dgraph, ctx, branch, answer_action);
                         auto xx = std::dynamic_pointer_cast<inst_awaitbranch>(in);
                         int lidnew = option ? xx->lidyes : xx->lidno; 
                         curinst = d[aid].jumptable[lidnew] - 1; // -1 for curinst++
+
                     }
 
                 }

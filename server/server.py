@@ -1,5 +1,5 @@
 
-from fsop import DEFAULT_COMMANDS, cmd_list, cmd_read, cmd_write_append, cmd_read_paginated, cmd_edit_page, cmd_query_modules, cmd_create_module
+from fsop import DEFAULT_COMMANDS, DEFAULT_ACTIONS
 from validate_arguments import validate_arguments
 
 def load_commands(): # loads a dictionary of all existing commands; both default and plugins (TODO)
@@ -8,53 +8,168 @@ def load_commands(): # loads a dictionary of all existing commands; both default
     return commands
 
 ALL_COMMANDS = load_commands()
+ALL_LEGAL_COMMANDS = { k: ALL_COMMANDS[k] for k in ALL_COMMANDS.keys() if k != "answer" }
 
-def parser_validate(parsedactions):
-    '''
-    Helper function used by the parser in the client. This is written server-side because the client does not have complete information on all plugins that are installed and what their function signatures are.
+def get_commands(): # returns a dictionary of all installed HLL commands
+    return { "status": "ok", "data": ALL_COMMANDS }
 
-    parsedactions is assumed to be a list of dicts
-    '''
+def convert_fsop_output(items):
 
-    def pverr(agent, line, name, reason):
+    return [
+        {
+            "parts": [
+                {
+                    "text": text
+                }
+            ],
+            "role": "user"
+        } for text in items
+    ]
+
+def run_action(content, partidx, proot, module, dgraph, expecting):
+    
+    part = content["parts"][partidx]["functionCall"]
+    actname = part["name"]
+    res = part["args"]
+    newctx = [content]        
+
+    try:
+
+        if actname not in expecting:
+            raise RuntimeError(f"Agent was suppposed to call one of the following functions: `{'`, `'.join(expecting)}` in this reply, but instead attempted to call `{actname}`.")
+
+        if actname == "answer":
+            return True, newctx, DEFAULT_ACTIONS["answer"](None, res, None, None)
+
+        elif actname in DEFAULT_COMMANDS:
+            newctx.extend(
+                convert_fsop_output(DEFAULT_ACTIONS[actname](proot, res, module, dgraph))
+            )
+            return True, newctx, None
+
+    except Exception as e:
+        newctx.extend(
+            convert_fsop_output([f"Error: {str(e)}"])
+        )
+        return False, newctx, None
+
+    raise RuntimeError("Custom actions not yet implemented.")
+
+
+def get_arg(d, a):
+
+    try: return d[a]
+    except: raise RuntimeError(f"Required argument `{a}` is missing from request")
+
+def agent_messed_up(reason):
+    return {
+        "status": "ok",
+        "data": {
+            "new_context": convert_fsop_output(["Error: " + reason]),
+            "agent_error": True
+        }
+    }
+
+def handle_agent(data):
+
+    try: data = json.loads(data) # data is passed from client still in string form to prevent a needless conversion to/from JSON
+    except: return { "status": "err", "reason": "Failed to parse reply." }
+
+    try:
+
+        rtype = get_arg(data, "response_type")
+        proot = get_arg(data, "project_root")
+        module = get_arg(data, "module")
+        dgraph = get_arg(data, "dependency_graph")
+        expecting = get_arg(data, "expecting")
+        if len(expecting) == 0: expecting = ALL_LEGAL_COMMANDS
+        data = get_arg(data, "response")
+    
+    except Exception as e:
+        return { "status": "err", "reason": str(e) }
+    
+    if rtype not in [ "action", "branch", "reply" ]: return { "status": "err", "reason": f"Invalid response type `{rtype}`." }
+
+    expecting_fncall = rtype != "reply"
+
+    candidates = data["candidates"]
+    bad = False
+
+    if len(candidates) == 0: bad = True
+    else:
+        content = candidates["content"]
+        if "parts" not in content.keys(): bad = True
+        else:
+            parts = content["parts"]
+            if len(parts) == 0: bad = True
+
+    if bad: return agent_messed_up("No content found in response.")
+
+    callidx = -1
+    textidx = -1
+
+    for (i, part) in enumerate(parts):
+
+        if "functionCall" in part.keys():
+            if callidx >= 0: return agent_messed_up("Only one function may be called per response.")
+            callidx = i
+
+        if "text" in part.keys():
+            if textidx >= 0: return agent_messed_up("Only one text object may be provided per response.")
+            textidx = i
+
+    if expecting_fncall and callidx < 0: return agent_messed_up("No function call found in reply.")
+
+    if not expecting_fncall and textidx < 0: return agent_messed_up("No text content found in reply.")
+
+    if rtype == "action": 
+
+        success, newctx, _ = run_action(
+            content,
+            callidx,
+            proot,
+            module,
+            dgraph,
+            expecting
+        )
+    
         return { 
-            "status": "err",
-            "reason": f"Failed to parse `{agent}`: Invalid action `{name}` on line {line}: {reason}" 
+            "status": "ok",
+            "data": {
+                "new_context": newctx,
+                "agent_error": not success
+            }
+        }
+    
+    elif rtype == "answer":
+
+        success, newctx, ans = run_action(
+            content,
+            callidx,
+            proot,
+            module,
+            dgraph,
+            expecting
+        )
+    
+        return { 
+            "status": "ok",
+            "data": {
+                "new_context": newctx,
+                "answer": ans,
+                "agent_error": not success
+            }
         }
 
-    error = None
-
-    for action in parsedactions:
-
-        agent = action["agent"]
-        line = action["line"]
-        name = action["name"]
-        args = action["args"]
-        isuser = action["isuser"]
-
-        if name not in ALL_COMMANDS:
-            return pverr(agent, line, name, "Command does not exist")
-
-        validation = validate_arguments(args, ALL_COMMANDS[name])
-
-        for arg in args.keys():
-            if not validation[arg]["valid"]:
-                return pverr(agent, line, name, f"Argument `{arg}` does not exist or did not match expected format")
-
-        # if it gets this far, you may assume every argument is valid
-
-        if len(validation.keys()) == 0: continue # agent is allowed to call actions with no arguments
-
-        iscomplete = all( validation[arg]["exists"] for arg in validation.keys() ) # whether every possible argument, required or not, is specified
-
-        if not isuser and iscomplete:
-            return pverr(agent, line, name, "Agent action must have at least one unspecified argument; otherwise there is no point in making it an agent action")
-
-    return { "status": "ok" }
-
-def perform_action(action):
-
-    return { "status": "err", "reason": "Not implemented yet" }
+    else: 
+        
+        return { 
+            "status": "ok", 
+            "data": {
+                "new_context": [content],
+                "agent_error": False
+            }
+        }
 
 # main server loop; code below was mostly written by chatgpt
 
@@ -89,12 +204,12 @@ async def handle_client(reader, writer):
         request_type = data["request"]
         data = data["data"]
 
-        if request_type == "validate_actions":
-            response = parser_validate(data)
-        elif request_type == "perform_action":
-            response = perform_action(data)
+        if request_type == "get_commands":
+            response = get_commands()
+        elif request_type == "handle_agent":
+            response = handle_agent(data)
         else:
-            response = { "status": "err", "reason": f"Unrecognized request type `{request_type}`" }
+            response = { "status": "err", "reason": f"Unrecognized request `{request_type}`" }
 
         if response["status"] == "ok":
             print("\t\tHandled request with no issues")

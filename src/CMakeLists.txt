@@ -14,6 +14,7 @@ set(SOURCES
     interpreter.cpp
     api.cpp
     unix_socket_client.cpp
+    validate.cpp
 )
 
 # Find libcurl

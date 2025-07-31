@@ -2,9 +2,10 @@
 #include "rex.hpp"
 #include "json.hpp"
 #include "server.hpp"
+#include "validate.hpp"
 
 extern void lex(std::vector<ptoklex>&, const std::string&, const std::string&); // lexer.cpp
-void analyze(dialogue&, const std::string&); // analysis.cpp
+extern void analyze(dialogue&, const std::string&); // analysis.cpp
 
 namespace fs = std::filesystem;
 
@@ -66,18 +67,75 @@ std::string invalid_target(std::string filename, std::string type, std::string n
 
 }
 
-pjson genactionjson(const std::string& agent, int line, const std::string& name, bool isuser, pjson args) {
+pjson ALL_COMMANDS;
+pjson ALL_LEGAL_COMMANDS; // excludes `answer` which cannot be explicitly called except by the runtime
 
-    auto j = json::makeDict();
-    auto& d = j->getDict();
+void loadcommands() {
 
-    d["agent"] = json::makeString(agent);
-    d["line"] = json::makeInt(line);
-    d["name"] = json::makeString(name);
-    d["isuser"] = json::makeBool(isuser);
-    d["args"] = args;
+    auto data = json::makeDict();
+    data->getDict()["request"] = json::makeString("get_commands");
+    data->getDict()["data"] = json::makeDict();
 
-    return j;
+    auto res = json::loadFromString(post(data->print()));
+    if (res->getDict()["status"]->getString() != "ok")
+        throw std::runtime_error(
+            res->getDict()["reason"]->getString()
+        );
+
+    ALL_COMMANDS = res->getDict()["data"];
+
+    ALL_LEGAL_COMMANDS = json::makeDict();
+    for (const auto& k : ALL_COMMANDS)
+        if (k.first != "answer") ALL_LEGAL_COMMANDS->getDict()[k.first] = k.second;
+
+}
+
+std::string pverr(const std::string& aname, int line, const std::string& actname, const std::string& reason) {
+    return (
+        "Failed to parse `" + 
+        aname +
+        "`:\nInvalid action `" +
+        actname +
+        "` on line " +
+        std::to_string(line) +
+        ": " +
+        reason
+    );
+}
+
+void validateargs(const std::string& aname, const std::string& actname, int line, pjson args, bool isuser) {
+
+    if (!ALL_LEGAL_COMMANDS) loadcommands();
+    
+    if (ALL_LEGAL_COMMANDS->getDict().find(actname) == ALL_LEGAL_COMMANDS->getDict().end())
+        throw std::runtime_error(
+            pverr(
+                aname,
+                line,
+                actname,
+                "Command does not exist"
+            )
+        );
+
+    ValidationResult res;
+    validate_arguments(res, args, ALL_LEGAL_COMMANDS->getDict()[actname]);
+
+    for (const auto& val : res) {
+        if (val.second.valid.has_value()) {
+            if (*val.second.valid) continue; // valid -> ok
+            else if (!isuser && !val.second.exists) continue; // agent action with missing argument -> ok (don't need to supply all arguments to agent)
+        }
+        throw std::runtime_error(
+            pverr(
+                aname,
+                line,
+                actname,
+                "Argument `" +
+                val.first + 
+                "` does not exist or did not match expected format"
+            )
+        );
+    }
 
 }
 
@@ -88,7 +146,7 @@ std::unique_ptr<rex> r;
 std::unique_ptr<rex> pa;
 std::unique_ptr<rex> ind;
 std::unique_ptr<rex> wsp;
-#include <iostream>
+
 void parse(dialogues& d, const std::vector<std::string>& paths) {
 
     if (!r) {
@@ -145,11 +203,8 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
         }
 
     }
-    std::cout << "Done discovering symbols!\n";
-    // parse code
 
-    pjson actionstocheck = json::makeList(); // action commands whose validity will be checked in a final pass by the server
-    auto& atclist = actionstocheck->getList();
+    // parse code
 
     for (auto& it : d) {
 
@@ -164,7 +219,7 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
         for (int i = 0; i < tokens.size(); i++) {
 
             auto ptl = tokens[i];
-            std::cout << "\tParsing " << (int)ptl.tok <<  " at line " << ptl.line << "\n";
+
             // collect identifier name(s) and textblock content if applicable
 
             switch (ptl.tok) {
@@ -364,16 +419,6 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                     else 
                         std::dynamic_pointer_cast<inst_awaitaction>(curaction)->actions.push_back(data);
 
-                    atclist.push_back(
-                        genactionjson(
-                            aname,
-                            ptl.line,
-                            actname,
-                            curaction->tok == useraction,
-                            data.args
-                        )
-                    );
-
                     break;
 
                 }
@@ -424,27 +469,18 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                         : 
                         std::dynamic_pointer_cast<inst_awaitaction>(curaction)->actions
                     ;
-                    std::cout << "\t\tActions size = " << actions.size() << "\n";
-                    for (const auto& d : actions)
+                    
+                    if (curaction->tok == action) for (const auto& d : actions)
                         if (d.aname == actname)
                             throw std::runtime_error(
                                 "Failed to parse `" +
-                                aname + "`\nDuplicate action `" +
+                                aname + "`\nDuplicate agent action `" +
                                 actname + "` at line " +
                                 std::to_string(ptl.line)
                             );
 
+                    validateargs(aname, actname, ptl.line, data.args, curaction->tok == useraction);
                     actions.push_back(data);
-
-                    atclist.push_back(
-                        genactionjson(
-                            aname,
-                            ptl.line,
-                            actname,
-                            curaction->tok == useraction,
-                            data.args
-                        )
-                    );
 
                     break;
 
@@ -452,17 +488,6 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
             }
         }
     }
-    std::cout << "Done parsing!\n";
-    // send parsed actions to server for validation
-    auto data = json::makeDict();
-    data->getDict()["request"] = json::makeString("validate_actions");
-    data->getDict()["data"] = actionstocheck;
-
-    pjson response = json::loadFromString(post(data->print()));
-    if (response->getDict()["status"]->getString() == "err")
-        throw std::runtime_error(
-            response->getDict()["reason"]->getString()
-        );
 
     for (auto& it : d) // static analysis
         analyze(it.second, dialogue::agentnames.queryname(it.first));

@@ -117,7 +117,7 @@ struct dialogue { // master container for a parsed HLL dialogue
 using dialogues = std::map<int, dialogue>;
 
 struct actiondata { // represents an action call with default arguments encoded in JSON
-    std::string aname;
+    std::string aname; // action name; not to be confused with agent name
     pjson args;
 };
 
