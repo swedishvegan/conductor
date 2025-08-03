@@ -85,7 +85,7 @@ void loadcommands() {
     ALL_COMMANDS = res->getDict()["data"];
 
     ALL_LEGAL_COMMANDS = json::makeDict();
-    for (const auto& k : ALL_COMMANDS)
+    for (const auto& k : ALL_COMMANDS->getDict())
         if (k.first != "answer") ALL_LEGAL_COMMANDS->getDict()[k.first] = k.second;
 
 }
@@ -470,7 +470,7 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
                         std::dynamic_pointer_cast<inst_awaitaction>(curaction)->actions
                     ;
                     
-                    if (curaction->tok == action) for (const auto& d : actions)
+                    if (curaction->tok != useraction) for (const auto& d : actions)
                         if (d.aname == actname)
                             throw std::runtime_error(
                                 "Failed to parse `" +

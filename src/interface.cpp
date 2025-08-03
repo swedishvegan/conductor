@@ -84,6 +84,11 @@ bool deletefolder(const std::string& dir) { // chatgpt
 
 void create(const std::string& pname, const std::string& root, const std::vector<std::string>& includes) {
 
+    char resolved_root[PATH_MAX];
+    if (!realpath(root.c_str(), resolved_root))
+        throw std::runtime_error("Failed to resolve path: " + root);
+    std::string canonical_root = resolved_root;
+
     auto projects = json::loadFromFile(hll_projects_folder "projects.json", true);
     auto& dict = projects->getDict();
 
@@ -95,7 +100,7 @@ void create(const std::string& pname, const std::string& root, const std::vector
         parse(d, includes);
     }
 
-    std::string proot = root + hll_subdir + pname + "/";
+    std::string proot = canonical_root + hll_subdir + pname + "/";
 
     auto dependencygraph = json::makeDict();
     auto modules = json::makeList();
@@ -105,7 +110,7 @@ void create(const std::string& pname, const std::string& root, const std::vector
     auto globalfiles = json::makeList();
 
     std::vector<std::string> filenames;
-    discoverfilenames(filenames, root);
+    discoverfilenames(filenames, canonical_root);
 
     for (const auto& discovered : filenames) globalfiles->getList().push_back(json::makeString(discovered));
     modules->getList().push_back(json::makeString("global"));
@@ -123,7 +128,7 @@ void create(const std::string& pname, const std::string& root, const std::vector
     dependencygraph->save(proot + hll_metadata_subdir + "dependency_graph.json", true);
 
     copyfiles(includes, proot + hll_metadata_subdir, true);
-    copyfiles({root}, proot, false);
+    copyfiles({canonical_root}, proot, false);
 
     dict[pname] = json::makeString(proot);
     projects->save(hll_projects_folder "projects.json", true);
@@ -305,7 +310,7 @@ int main(int argc, char** argv) { // chatgpt
             throw std::runtime_error("Unknown command: " + cmd);
         }
     } catch (const std::exception& e) {
-        std::cerr << e.what() << "\n";
+        std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
 

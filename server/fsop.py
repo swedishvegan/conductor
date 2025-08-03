@@ -53,9 +53,9 @@ READ_COMMAND = {
     }
 }
 
-READ_PAGINATED_COMMAND = {
-    "name": "read_paginated",
-    "description": "Read file(s), segmented into logical pages",
+READ_LINES_COMMAND = {
+    "name": "read_lines",
+    "description": "Read file(s), segmented into individual numbered lines",
     "parameters": {
         "type": "object",
         "properties": {
@@ -118,9 +118,9 @@ APPEND_COMMAND = {
     }
 }
 
-EDIT_PAGE_COMMAND = {
-    "name": "edit_page",
-    "description": "Rewrite specified page(s) of a file. If you select to rewrite pages in the range [start_page, end_page] (inclusive), then the content you supply will directly replace these pages without modifying any other pages. **It is crucial that you take great care to provide the correct page indices, and provide content that correctly replaces the existing content of the pages in this range only.** Otherwise, you may unintentionally erase existing content or leave erroneous content in the file; either case could cause text to be illegible or cause code to not compile.",
+EDIT_COMMAND = {
+    "name": "edit",
+    "description": "Rewrite specified line(s) of a file. If you select to rewrite lines in the range [start_line, end_line] (inclusive), then the content you supply will directly replace these lines without modifying any other lines. **It is crucial that you take great care to provide the correct line indices, and provide content that correctly replaces the existing content of the lines in this range only.** Otherwise, you may unintentionally erase existing content or leave erroneous content in the file; either case could cause text to be illegible or cause code to not compile. The content you provide does not need to be a single line or have the same number of lines as the content being replaced.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -134,18 +134,18 @@ EDIT_PAGE_COMMAND = {
             },
             "content": {
                 "type": "string",
-                "description": "Content to write to the file page"
+                "description": "Content to write to the specified file line range"
             },
-            "start_page": {
+            "start_line": {
                 "type": "integer",
-                "description": "First page to be replaced by your edit"
+                "description": "First line to be replaced by your edit"
             },
-            "end_page": {
+            "end_line": {
                 "type": "integer",
-                "description": "Last page (inclusive) to be replaced by your edit"
+                "description": "Last line (inclusive) to be replaced by your edit; if set to -1, it is treated as the same value as start_line"
             }
         },
-        "required": ["module", "path", "content", "start_page", "end_page"]
+        "required": ["module", "path", "content", "start_line", "end_line"]
     }
 }
 
@@ -198,10 +198,10 @@ DEFAULT_COMMANDS = {
     "no_op": NO_OP_COMMAND,
     "list": LIST_COMMAND,
     "read": READ_COMMAND,
-    "read_paginated": READ_PAGINATED_COMMAND,
+    "read_lines": READ_LINES_COMMAND,
     "write": WRITE_COMMAND,
     "append": APPEND_COMMAND,
-    "edit_page": EDIT_PAGE_COMMAND,
+    "edit": EDIT_COMMAND,
     "query_modules": QUERY_MODULES_COMMAND,
     "create_module": CREATE_MODULE_COMMAND,
     "answer": ANSWER_COMMAND
@@ -222,7 +222,7 @@ def _validate_fsop(module, target, dgraph, accessty):
     if target == ".dependencies":
         if accessty != "r": raise RuntimeError(f"Dependency modules are read-only.")
         return
-    if target in [".children", "*"]: return
+    if target in [".children", "*", "."]: return
     if target not in dgraph["modules"]: raise RuntimeError(f"Invalid module pattern `{target}`.")
     if not _can_read(module, target, dgraph) if accessty == "r" else _can_write(module, target, dgraph): 
         raise RuntimeError(f"Module `{module}` does not have permission to {'view the contents of' if accessty == 'r' else 'write to'} module `{target}`.")
@@ -231,7 +231,7 @@ def _get_modules(module, target, dgraph, accessty):
     _validate_fsop(module, target, dgraph, accessty)
     if target == ".dependencies": return dgraph["dependencies"][module]
     if target == ".children": return dgraph["children"][module]
-    if target == ".": return module
+    if target == ".": return [module]
     if target == "*": return [module, "global"] + dgraph["children"][module] + (dgraph["dependencies"][module] if accessty == "r" else [])
     return [target]
 
@@ -249,20 +249,18 @@ def _read_file(proot, target, path):
 def _write_file(proot, target, path, content, accessty):
     with open(proot + target + "." + path, accessty) as f: f.write(content)
 
-def _get_pages(lines): return ["\n".join(lines[i:i + PAGE_SIZE]) for i in range(0, len(lines), PAGE_SIZE)]
 
-def _read_file_pages(proot, target, path):
+def _read_file_lines(proot, target, path):
     with open(proot + target + "." + path, "r") as f:
-        lines = f.readlines()
-        return _get_pages(lines)
+        return f.readlines()
 
-def _write_file_pages(proot, target, path, content, pages, spage, epage): #inclusive on both ends
+def _write_file_lines(proot, target, path, content, lines, sline, eline): #inclusive on both ends
     with open(proot + target + "." + path, "w") as f:
         newcontent = ""
-        for (i, page) in enumerate(pages):
-            if i < spage or i > epage: newcontent += page + ("\n" if i != len(pages) - 1 else "") # TODO: make sure this handles newlines correctly
-            elif i == spage: newcontent += content + "\n" # only append content once
-        f.write(newcontent) # erase old content and replace it with updated pages
+        for (i, page) in enumerate(lines):
+            if i < sline or i > eline: newcontent += page
+            elif i == sline: newcontent += content + "\n" # only append content once
+        f.write(newcontent) # erase old content and replace it with updated lines
 
 def _setup_fsop(res, module, dgraph, accessty):
 
@@ -281,8 +279,8 @@ def _setup_fsop(res, module, dgraph, accessty):
             raise RuntimeError(f"Module `{module_arg}` does not exist.")
         if not _can_write(module, module_arg, dgraph):
             raise RuntimeError(f"Module `{module}` does not have permission to write to module `{module_arg}.`")
-        if path_arg not in dgraph["files"][module_arg]:
-            raise RuntimeError(f"Module `{module_arg}` has no file called `{path_arg}`.")
+        if accessty == "e" and path_arg not in dgraph["files"][module_arg]:
+            raise RuntimeError(f"Module `{module_arg}` does not contain file `{path_arg}`.")
         paths = [[module_arg, path_arg]]
 
     if len(paths) == 0: return None, [f"No files matched the pattern `{module_arg}/{path_arg}`."]
@@ -295,36 +293,48 @@ def _setup_fsop(res, module, dgraph, accessty):
 # homogenously
 
 def cmd_no_op(proot, res, module, dgraph):
-    return [ "Successfully done nothing." ]
+    return [ "Successfully done nothing." ], False
 
 def cmd_list(proot, res, module, dgraph):
     
     module_arg = _get_arg(res, "module", module).strip()
     targets = _get_modules(module, module_arg, dgraph, "r")
 
-    if len(targets) == 0: return [f"No modules matched the pattern `{module_arg}`."]
+    if len(targets) == 0: return [f"No modules matched the pattern `{module_arg}`."], False
 
     return [
-        f"Contents of module `{target}`:\n" + "\n".join(dgraph["files"][target])
+        f"Contents of module `{target}`:\n" + "\n".join(dgraph["files"][target]) if len(dgraph["files"][target]) > 0 else f"Module `{target}` is empty."
         for target in targets
-    ]
+    ], False
 
 def cmd_read(proot, res, module, dgraph):
 
-    paths, res = _setup_fsop(res, module, dgraph, "r")
-    if res is not None: return res
+    paths, problem = _setup_fsop(res, module, dgraph, "r")
+    if problem is not None: return problem, False
 
-    return [f"Contents of file `{path[0]}/{path[1]}`:\n" + _read_file(proot, path[0], path[1]) for path in paths]
+    return [f"Contents of file `{path[0]}/{path[1]}`:\n" + _read_file(proot, path[0], path[1]) for path in paths], False
 
 def _cmd_write_append(proot, res, module, dgraph, accessty):
 
-    paths, res = _setup_fsop(res, module, dgraph, accessty)
-    if res is not None: return res
+    paths, problem = _setup_fsop(res, module, dgraph, accessty)
+    if problem is not None: return problem, False
 
     content = _get_arg(res, "content").strip()
+    dgraph_updated = False
 
-    for path in paths: _write_file(proot, path[0], path[1], content, accessty)
-    return []
+    for path in paths:
+
+        module_arg, path_arg = path
+        _write_file(proot, module_arg, path_arg, content, accessty)
+
+        # update dependency graph
+        existing_files = dgraph["files"][module_arg]
+        if path_arg not in existing_files: 
+            
+            existing_files.append(path_arg)
+            dgraph_updated = True
+
+    return [f"Content successfully written to `{paths[0][0]}/{paths[0][1]}`."], dgraph_updated
 
 def cmd_write(proot, res, module, dgraph):
     return _cmd_write_append(proot, res, module, dgraph, "w")
@@ -332,36 +342,38 @@ def cmd_write(proot, res, module, dgraph):
 def cmd_append(proot, res, module, dgraph):
     return _cmd_write_append(proot, res, module, dgraph, "a")
 
-def cmd_read_paginated(proot, res, module, dgraph):
+def cmd_read_lines(proot, res, module, dgraph):
 
-    paths, res = _setup_fsop(res, module, dgraph, "r")
-    if res is not None: return res
+    paths, problem = _setup_fsop(res, module, dgraph, "r")
+    if problem is not None: return problem, False
 
     res = []
     for path in paths:
-        pages = _read_file_pages(proot, path[0], path[1])
-        res.extend([f"Contents of file `{path[0]}/{path[1]}` page {p}:\n" + pages[p] for p in range(len(pages))]) # pages are zero-indexed not one-indexed, I think this is more natural
+        lines = _read_file_lines(proot, path[0], path[1])
+        res.append("\n".join([f"Line {ln}: ```{lines[ln]}```" for ln in range(len(lines))]))
 
-    return res
+    return res, False
 
-def cmd_edit_page(proot, res, module, dgraph):
+def cmd_edit(proot, res, module, dgraph):
 
-    paths, res = _setup_fsop(res, module, dgraph, "w")
-    if res is not None: return res
+    paths, problem = _setup_fsop(res, module, dgraph, "e")
+    if problem is not None: return problem, False
 
     content = _get_arg(res, "content").strip()
-    try: spage = int(_get_arg(res, "start_page", -1))
-    except: spage = -1
-    try: epage = int(_get_arg(res, "end_page", -1))
-    except: epage = -1
+    try: sline = int(_get_arg(res, "start_line", -1))
+    except: sline = -1
+    try: eline = int(_get_arg(res, "end_line", -1))
+    except: eline = -1
+
+    if eline == -1: eline = sline
 
     for path in paths:
-        pages = _read_file_pages(proot, path[0], path[1])
-        if spage < 0 or epage >= len(pages) or spage > epage:
-            raise RuntimeError(f"Invalid page range [{spage, epage}] for file `{path[0]}/{path[1]}` with {len(pages)} pages.")
-        _write_file_pages(proot, path[0], path[1], content, pages, spage, epage)
+        lines = _read_file_lines(proot, path[0], path[1])
+        if sline < 0 or eline >= len(lines) or sline > eline:
+            raise RuntimeError(f"Invalid line range [{sline, eline}] for file `{path[0]}/{path[1]}` with {len(lines)} lines.")
+        _write_file_lines(proot, path[0], path[1], content, lines, sline, eline)
 
-    return []
+    return [f"Successfully edited lines {sline}-{eline} of `{paths[0][0]}/{paths[0][1]}`."], False
 
 def cmd_query_modules(proot, res, module, dgraph):
 
@@ -375,7 +387,7 @@ def cmd_query_modules(proot, res, module, dgraph):
         ("`, `".join(children) if len(children) > 0 else "[none]") +
         "`\nAll modules: `" +
         "`, `".join(allmodules) + "`"
-    )]
+    )], False
 
 def cmd_create_module(proot, res, module, dgraph):
 
@@ -396,7 +408,7 @@ def cmd_create_module(proot, res, module, dgraph):
     dgraph["children"][module_arg] = []
     dgraph["files"][module_arg] = []
 
-    return []
+    return [], True
 
 def cmd_answer(proot, res, module, dgraph):
 
@@ -413,8 +425,8 @@ DEFAULT_ACTIONS = {
     "read": cmd_read,
     "write": cmd_write,
     "append": cmd_append,
-    "read_paginated": cmd_read_paginated,
-    "edit_page": cmd_edit_page,
+    "read_lines": cmd_read_lines,
+    "edit": cmd_edit,
     "query_modules": cmd_query_modules,
     "create_module": cmd_create_module,
     "answer": cmd_answer

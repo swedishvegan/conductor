@@ -5,8 +5,9 @@
 #include "defs.hpp"
 #include "rex.hpp"
 #include "json.hpp"
+#include "server.hpp"
 
-extern bool apirequest(const std::string& proot, const std::string& curmodule, pjson dgraph, pjson ctx, ptok k, const std::vector<actiondata> actions);
+extern bool apirequest(const std::string& proot, const std::string& curmodule, pjson& dgraph, pjson ctx, ptok k, const std::vector<actiondata>& actions);
 extern pjson gencontextelement(const std::string& text, bool isuser = true);
 extern pjson gendefaultcontext(const std::string& module);
 
@@ -71,7 +72,7 @@ struct interpreter {
 
         pendingframes.clear();
         pendingctxname = "";
-        
+
         switch (in->tok) {
 
             case goto_: {
@@ -168,7 +169,7 @@ struct interpreter {
 
                     }
                     case action: {
-                        
+
                         apirequest(
                             proot,
                             curmodule,
@@ -182,7 +183,7 @@ struct interpreter {
                     }
                     case branch: {
 
-                        static std::vector<actiondata> answer_action = actiondata { "answer", json::makeDict() };
+                        static std::vector<actiondata> answer_action = { actiondata { "answer", json::makeDict() } };
 
                         bool option = apirequest(proot, curmodule, dgraph, ctx, branch, answer_action);
                         auto xx = std::dynamic_pointer_cast<inst_awaitbranch>(in);
@@ -192,6 +193,54 @@ struct interpreter {
                     }
 
                 }
+
+                shouldsave = true;
+                break;
+
+            }
+            case useraction: {
+
+                auto x = std::dynamic_pointer_cast<inst_action>(in);
+                const auto& actions = x->actions;
+                pjson aj = json::makeList();
+
+                for (const auto& a : actions) {
+
+                    auto name = json::makeString(a.aname);
+                    auto args = a.args;
+                    auto d = json::makeDict();
+
+                    d->getDict()["name"] = name;
+                    d->getDict()["args"] = args;
+                    aj->getList().push_back(d);
+
+                }
+
+                auto data = json::makeDict();
+                auto& dd = data->getDict();
+                
+                dd["project_root"] = json::makeString(proot);
+                dd["module"] = json::makeString(curmodule);
+                dd["dependency_graph"] = dgraph;
+                dd["actions"] = aj;
+
+                auto req = json::makeDict();
+                req->getDict()["request"] = json::makeString("run_user_action");
+                req->getDict()["data"] = data;
+
+                auto resp = json::loadFromString(post(req->print()));
+                auto& rd = resp->getDict();
+                
+                if (rd["status"]->getString() == "err")
+                    throw std::runtime_error("User action failed: " + rd["reason"]->getString());
+
+                auto& respdata = rd["data"]->getDict();
+
+                auto& newctx = respdata["new_context"]->getList();
+                for (auto c : newctx) ctx->getList().push_back(c);
+
+                if (respdata.find("dependency_graph") != respdata.end())
+                    dgraph = respdata["dependency_graph"];
 
                 shouldsave = true;
                 break;

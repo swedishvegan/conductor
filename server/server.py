@@ -1,6 +1,5 @@
 
 from fsop import DEFAULT_COMMANDS, DEFAULT_ACTIONS
-from validate_arguments import validate_arguments
 
 def load_commands(): # loads a dictionary of all existing commands; both default and plugins (TODO)
 
@@ -26,12 +25,15 @@ def convert_fsop_output(items):
         } for text in items
     ]
 
-def run_action(content, partidx, proot, module, dgraph, expecting):
-    
+def run_agent_action(content, partidx, proot, module, dgraph, default_params, expecting):
+
     part = content["parts"][partidx]["functionCall"]
     actname = part["name"]
     res = part["args"]
-    newctx = [content]        
+    newctx = [content]
+
+    if actname in default_params.keys():
+        res = res | default_params[actname]
 
     try:
 
@@ -39,19 +41,23 @@ def run_action(content, partidx, proot, module, dgraph, expecting):
             raise RuntimeError(f"Agent was suppposed to call one of the following functions: `{'`, `'.join(expecting)}` in this reply, but instead attempted to call `{actname}`.")
 
         if actname == "answer":
-            return True, newctx, DEFAULT_ACTIONS["answer"](None, res, None, None)
+
+            res = DEFAULT_ACTIONS["answer"](None, res, None, None)
+            return True, newctx, res, None
 
         elif actname in DEFAULT_COMMANDS:
+
+            res, update_dgraph = DEFAULT_ACTIONS[actname](proot, res, module, dgraph)
             newctx.extend(
-                convert_fsop_output(DEFAULT_ACTIONS[actname](proot, res, module, dgraph))
+                convert_fsop_output(res)
             )
-            return True, newctx, None
+            return True, newctx, None, update_dgraph
 
     except Exception as e:
         newctx.extend(
             convert_fsop_output([f"Error: {str(e)}"])
         )
-        return False, newctx, None
+        return False, newctx, False, False
 
     raise RuntimeError("Custom actions not yet implemented.")
 
@@ -61,19 +67,16 @@ def get_arg(d, a):
     try: return d[a]
     except: raise RuntimeError(f"Required argument `{a}` is missing from request")
 
-def agent_messed_up(reason):
+def agent_messed_up(content, reason):
     return {
         "status": "ok",
         "data": {
-            "new_context": convert_fsop_output(["Error: " + reason]),
+            "new_context": [content] + convert_fsop_output(["Error: " + reason]),
             "agent_error": True
         }
     }
 
 def handle_agent(data):
-
-    try: data = json.loads(data) # data is passed from client still in string form to prevent a needless conversion to/from JSON
-    except: return { "status": "err", "reason": "Failed to parse reply." }
 
     try:
 
@@ -81,15 +84,17 @@ def handle_agent(data):
         proot = get_arg(data, "project_root")
         module = get_arg(data, "module")
         dgraph = get_arg(data, "dependency_graph")
+        default_params = get_arg(data, "default_parameters") # for handle_agent, actions is a dict, not a list like in run_user_action; this is because the actions have a slightly different meaning in this context
         expecting = get_arg(data, "expecting")
         if len(expecting) == 0: expecting = ALL_LEGAL_COMMANDS
         data = get_arg(data, "response")
+        data = json.loads(data) # data is passed from client still in string form to prevent a needless conversion to/from JSON
     
     except Exception as e:
         return { "status": "err", "reason": str(e) }
     
     if rtype not in [ "action", "branch", "reply" ]: return { "status": "err", "reason": f"Invalid response type `{rtype}`." }
-
+    
     expecting_fncall = rtype != "reply"
 
     candidates = data["candidates"]
@@ -97,13 +102,14 @@ def handle_agent(data):
 
     if len(candidates) == 0: bad = True
     else:
+        candidates = candidates[0]
         content = candidates["content"]
         if "parts" not in content.keys(): bad = True
         else:
             parts = content["parts"]
             if len(parts) == 0: bad = True
 
-    if bad: return agent_messed_up("No content found in response.")
+    if bad: return agent_messed_up(content, "No content found in response.")
 
     callidx = -1
     textidx = -1
@@ -111,44 +117,50 @@ def handle_agent(data):
     for (i, part) in enumerate(parts):
 
         if "functionCall" in part.keys():
-            if callidx >= 0: return agent_messed_up("Only one function may be called per response.")
+            if callidx >= 0: return agent_messed_up(content, "Only one function may be called per response.")
             callidx = i
 
         if "text" in part.keys():
-            if textidx >= 0: return agent_messed_up("Only one text object may be provided per response.")
+            if textidx >= 0: return agent_messed_up(content, "Only one text object may be provided per response.")
             textidx = i
 
-    if expecting_fncall and callidx < 0: return agent_messed_up("No function call found in reply.")
+    if expecting_fncall and callidx < 0: return agent_messed_up(content, "No function call found in reply.")
 
-    if not expecting_fncall and textidx < 0: return agent_messed_up("No text content found in reply.")
+    if not expecting_fncall and textidx < 0: return agent_messed_up(content, "No text content found in reply.")
 
     if rtype == "action": 
 
-        success, newctx, _ = run_action(
+        success, newctx, _, update_dgraph = run_agent_action(
             content,
             callidx,
             proot,
             module,
             dgraph,
+            default_params,
             expecting
         )
     
-        return { 
+        r = { 
             "status": "ok",
             "data": {
                 "new_context": newctx,
                 "agent_error": not success
             }
         }
-    
-    elif rtype == "answer":
 
-        success, newctx, ans = run_action(
+        if update_dgraph: r["data"]["dependency_graph"] = dgraph
+        
+        return r
+    
+    elif rtype == "branch":
+
+        success, newctx, ans, _ = run_agent_action(
             content,
             callidx,
             proot,
             module,
             dgraph,
+            default_params,
             expecting
         )
     
@@ -171,6 +183,44 @@ def handle_agent(data):
             }
         }
 
+def run_user_action(data):
+
+    try:
+
+        proot = get_arg(data, "project_root")
+        module = get_arg(data, "module")
+        dgraph = get_arg(data, "dependency_graph")
+        actions = get_arg(data, "actions")
+    
+    except Exception as e:
+        return { "status": "err", "reason": str(e) }
+
+    newctx = []
+
+    for action in actions:
+
+        try:
+
+            name = get_arg(action, "name")
+            args = get_arg(action, "args")
+            res, update_dgraph = DEFAULT_ACTIONS[name](proot, args, module, dgraph)
+
+        except Exception as e:
+            return { "status": "err", "reason": str(e) }
+
+        newctx.extend(res)
+
+    r = {
+        "status": "ok",
+        "data": {
+            "new_context": convert_fsop_output(newctx)
+        }
+    }
+
+    if update_dgraph: r["data"]["dependency_graph"] = dgraph
+
+    return r
+    
 # main server loop; code below was mostly written by chatgpt
 
 import asyncio, signal, os, struct, json
@@ -199,7 +249,7 @@ async def handle_client(reader, writer):
         msg_len = struct.unpack('!I', raw_len)[0]
         raw_json = await recv_all(reader, msg_len)
         data = json.loads(raw_json.decode())
-        print(f"\tReceived JSON: {data}")
+        print(f"Received JSON: {data}")
 
         request_type = data["request"]
         data = data["data"]
@@ -208,13 +258,15 @@ async def handle_client(reader, writer):
             response = get_commands()
         elif request_type == "handle_agent":
             response = handle_agent(data)
+        elif request_type == "run_user_action":
+            response = run_user_action(data)
         else:
             response = { "status": "err", "reason": f"Unrecognized request `{request_type}`" }
 
         if response["status"] == "ok":
-            print("\t\tHandled request with no issues")
+            print("\nHandled request with no issues\n\n")
         else:
-            print(f"\t\tFailed to handle request: {response['reason']}")
+            print(f"\nFailed to handle request: {response['reason']}\n\n")
 
         encoded = json.dumps(response).encode()
         writer.write(struct.pack('!I', len(encoded)))
@@ -246,7 +298,7 @@ async def main():
         f.write(str(os.getpid()))
         f.flush()
         os.fsync(f.fileno())
-    print(f"Server PID written to {PIDFILE}")
+    print(f"Server PID written to {PIDFILE}\n\n")
 
     try:
         server = await asyncio.start_unix_server(handle_client, path=SOCKET_PATH)

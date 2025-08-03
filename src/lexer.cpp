@@ -18,8 +18,8 @@ constexpr ptokpat pats[] = {
         goto_, "goto" sep 
         loadctx, "loadctx" sep
         storectx, "storectx" sep
-        autoprompt, "autoprompt" sep
-        info, "info" sep
+        autoprompt, "autoprompt:" sep
+        info, "info:" sep
         call, "call" sep
         invoke, "invoke" sep
         recurse, "recurse" sep
@@ -140,7 +140,7 @@ void genlegalsuccessors(ptok cur, ptok* succs) {
     }
 
 }
-#include <iostream>
+
 void lex(std::vector<ptoklex>& lexed, const std::string& filepath, const std::string& codestr) {
 
     if (!ptokrexesinitialized) initializerexes();
@@ -157,7 +157,7 @@ void lex(std::vector<ptoklex>& lexed, const std::string& filepath, const std::st
 
         for (int i = 0;; i++) {
 
-            ptok succ = successors[i]; std::cout << "\tTrying succ: " << (int)succ << "\n";
+            ptok succ = successors[i];
             if (succ == _none) throw std::runtime_error(("Failed to lex " + filepath) + "\nNo valid next tokens found at line " + std::to_string(line));
 
             if (succ == eof) {
@@ -174,7 +174,7 @@ void lex(std::vector<ptoklex>& lexed, const std::string& filepath, const std::st
             for (int i = 0; i < matchlen; i++) {
                 if (*code == '\n') line++;
                 code++;
-            } std::cout << "Matched token " << (int)cur << "/" << (int)_len << " at line " << ptl.line << "\n";
+            }
             break;
 
         }
