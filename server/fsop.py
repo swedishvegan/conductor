@@ -359,7 +359,7 @@ def cmd_edit(proot, res, module, dgraph):
     paths, problem = _setup_fsop(res, module, dgraph, "e")
     if problem is not None: return problem, False
 
-    content = _get_arg(res, "content").strip()
+    content = _get_arg(res, "content")
     try: sline = int(_get_arg(res, "start_line", -1))
     except: sline = -1
     try: eline = int(_get_arg(res, "end_line", -1))

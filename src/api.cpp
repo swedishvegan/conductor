@@ -275,7 +275,7 @@ bool apirequest(const std::string& proot, const std::string& curmodule, pjson& d
     if (needscall) {
         instructionctx = "In your next reply, you are **required** to call one of the following functions: ";
         gencmdstr(instructionctx, expecting);
-        instructionctx += ".";
+        instructionctx += ". You must reply ONLY with a single valid JSON object containing the all required argument keys. No code fences, comments, or extra text are allowed. All strings must use standard double quotes and escape internal quotes (\") and backslashes (\\). The output must be valid JSON that can be parsed without errors.";
     }
     else instructionctx = "Please answer in plaintext, without calling any functions.";
 

@@ -71,7 +71,7 @@ def agent_messed_up(content, reason):
     return {
         "status": "ok",
         "data": {
-            "new_context": [content] + convert_fsop_output(["Error: " + reason]),
+            "new_context": ([content] if content is not None else []) + convert_fsop_output(["Error: " + reason]),
             "agent_error": True
         }
     }
@@ -92,22 +92,25 @@ def handle_agent(data):
     
     except Exception as e:
         return { "status": "err", "reason": str(e) }
-    
+
     if rtype not in [ "action", "branch", "reply" ]: return { "status": "err", "reason": f"Invalid response type `{rtype}`." }
     
     expecting_fncall = rtype != "reply"
 
     candidates = data["candidates"]
     bad = False
+    content = None
 
     if len(candidates) == 0: bad = True
     else:
-        candidates = candidates[0]
-        content = candidates["content"]
-        if "parts" not in content.keys(): bad = True
-        else:
-            parts = content["parts"]
-            if len(parts) == 0: bad = True
+        try:
+            candidates = candidates[0]
+            content = candidates["content"]
+            if "parts" not in content.keys(): bad = True
+            else:
+                parts = content["parts"]
+                if len(parts) == 0: bad = True
+        except: bad = True
 
     if bad: return agent_messed_up(content, "No content found in response.")
 
