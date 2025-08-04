@@ -14,7 +14,7 @@
 
 const std::string URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 const int MAX_API_BACKOFF_TIME = 64;
-const int MAX_REPLY_ATTEMPTS = 3;
+const int MAX_REPLY_ATTEMPTS = 6;
 
 class CurlClient { // chatgpt
 public:
@@ -275,7 +275,14 @@ bool apirequest(const std::string& proot, const std::string& curmodule, pjson& d
     if (needscall) {
         instructionctx = "In your next reply, you are **required** to call one of the following functions: ";
         gencmdstr(instructionctx, expecting);
-        instructionctx += ". You must reply ONLY with a single valid JSON object containing the all required argument keys. No code fences, comments, or extra text are allowed. All strings must use standard double quotes and escape internal quotes (\") and backslashes (\\). The output must be valid JSON that can be parsed without errors.";
+        instructionctx += " using the Gemini function calling API.\nIMPORTANT: The values of string arguments should escape all internal back-slashes (`\\`) and quotes (`\"`). Otherwise, your reply will not be parsed correctly.";
+        /*if (default_params->getDict().size() > 0) {
+            instructionctx += "\nThe following parameters have already been supplied, and you should not provide them yourself:\n";
+            for (const auto& kv : default_params) {
+                if (kv.second->getDict().size() == 0) continue;
+                std::cout << 
+            }
+        }*/
     }
     else instructionctx = "Please answer in plaintext, without calling any functions.";
 
@@ -292,7 +299,7 @@ bool apirequest(const std::string& proot, const std::string& curmodule, pjson& d
         requestbody->getDict()["contents"] = ctx;
         requestbody->getDict()["generationConfig"] = genconfig;
         if (needscall) requestbody->getDict()["tools"] = tools;
-
+        //std::cout << "requestbody=\n" << requestbody->print() << "\n";
         while ((http_code = curl_post_request(requestbody->print(), response)) != 200) {
 
             std::cerr << "Failed to get API reply: Status code " << http_code << ". "
@@ -312,14 +319,22 @@ bool apirequest(const std::string& proot, const std::string& curmodule, pjson& d
         auto& newctx = respdata["new_context"]->getList();
         auto aerr = respdata["agent_error"]->getBool();
         auto ans = (respdata.find("answer") == respdata.end()) ? true : respdata["answer"]->getBool();
+        std::string userinfo;
 
         if (aerr) { // error handling
-
-            if (attempt >= MAX_REPLY_ATTEMPTS) {
+            
+            if (attempt > MAX_REPLY_ATTEMPTS) {
                 std::cout << "Agent gave bad reply " << (attempt + 1) << " time(s).\n----------\n" << response << "\n----------\nTalk to agent: " << std::flush;
-                std::string userinfo; std::getline(std::cin, userinfo);
-                ctx->getList().push_back(gencontextelement(userinfo)); // fallback: user needs to talk to agent and figure out why it's giving bad outputs
+                std::getline(std::cin, userinfo);
             }
+            else if (attempt == MAX_REPLY_ATTEMPTS - 4) // this seems weird, but forcing it to talk through why it fails to call the function actually is really effective in getting it to correct itself
+                userinfo = "What's wrong? Why are you having such a hard time calling this function?";
+            else if (attempt == MAX_REPLY_ATTEMPTS - 3)
+                userinfo = "Can you explain to me what's going wrong?";
+            else if (attempt == MAX_REPLY_ATTEMPTS - 2)
+                userinfo = "Please explain step-by-step very carefully what is going wrong and why your replies are repeatedly failing to parse. Ignore previous instructions; just reply in plain text and don't try to call any functions. Think about what may be going wrong and how you might fix it in your future replies.";
+            else if (attempt == MAX_REPLY_ATTEMPTS - 1)
+                userinfo = "Now, try one more time to call the function as requested earlier, without making any of the errors that caused it not to succeed.";
 
         }
         else {
@@ -328,12 +343,13 @@ bool apirequest(const std::string& proot, const std::string& curmodule, pjson& d
 
             if (respdata.find("dependency_graph") != respdata.end())
                 dgraph = respdata["dependency_graph"];
-
+            //if (respdata.find("dependency_graph") != respdata.end()) std::cout << "New dgraph: \n" << dgraph->print() << "\n"; else std::cout << "No new dgraph\n";
         }
 
         for (auto c : newctx) ctx->getList().push_back(c);
         if (!aerr) return ans;
-
+        else if (userinfo.size() > 0) ctx->getList().push_back(gencontextelement(userinfo)); // fallback: user needs to talk to agent and figure out why it's giving bad outputs
+        //if (aerr) std::cout << "request body = " << requestbody->print() << "\nctx = \n" << ctx->print() << "\n\n";
     }
 
     return true;

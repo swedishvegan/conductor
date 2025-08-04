@@ -381,7 +381,7 @@ struct interpreter {
         if (stacksize < 0) stacksize = stack.size();
         std::string fname = proot + hll_metadata_subdir + "ctx";
         if (varname.size() == 0) fname += std::to_string(stacksize);
-        else fname += varname + "-" + curmodule;
+        else fname += "-" + varname + "-" + curmodule;
         fname += ".json";
         return fname;
         

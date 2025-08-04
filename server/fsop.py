@@ -132,9 +132,10 @@ EDIT_COMMAND = {
                 "type": "string",
                 "description": PATH_DESCRIPTION_W
             },
-            "content": {
-                "type": "string",
-                "description": "Content to write to the specified file line range"
+            "new_lines": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Content that will replace the specified file line range"
             },
             "start_line": {
                 "type": "integer",
@@ -145,7 +146,7 @@ EDIT_COMMAND = {
                 "description": "Last line (inclusive) to be replaced by your edit; if set to -1, it is treated as the same value as start_line"
             }
         },
-        "required": ["module", "path", "content", "start_line", "end_line"]
+        "required": ["module", "path", "new_lines", "start_line", "end_line"]
     }
 }
 
@@ -359,7 +360,7 @@ def cmd_edit(proot, res, module, dgraph):
     paths, problem = _setup_fsop(res, module, dgraph, "e")
     if problem is not None: return problem, False
 
-    content = _get_arg(res, "content")
+    new_lines = _get_arg(res, "new_lines", [])
     try: sline = int(_get_arg(res, "start_line", -1))
     except: sline = -1
     try: eline = int(_get_arg(res, "end_line", -1))
@@ -371,7 +372,7 @@ def cmd_edit(proot, res, module, dgraph):
         lines = _read_file_lines(proot, path[0], path[1])
         if sline < 0 or eline >= len(lines) or sline > eline:
             raise RuntimeError(f"Invalid line range [{sline, eline}] for file `{path[0]}/{path[1]}` with {len(lines)} lines.")
-        _write_file_lines(proot, path[0], path[1], content, lines, sline, eline)
+        _write_file_lines(proot, path[0], path[1], "\n".join(new_lines), lines, sline, eline)
 
     return [f"Successfully edited lines {sline}-{eline} of `{paths[0][0]}/{paths[0][1]}`."], False
 
@@ -407,8 +408,9 @@ def cmd_create_module(proot, res, module, dgraph):
     dgraph["dependencies"][module_arg] = deps_arg
     dgraph["children"][module_arg] = []
     dgraph["files"][module_arg] = []
-
-    return [], True
+    dgraph["children"][module].append(module_arg)
+    #print(f"Updated dgraph = {dgraph}")
+    return [f"Successfully created module `{module_arg}`."], True
 
 def cmd_answer(proot, res, module, dgraph):
 

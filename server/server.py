@@ -112,7 +112,7 @@ def handle_agent(data):
                 if len(parts) == 0: bad = True
         except: bad = True
 
-    if bad: return agent_messed_up(content, "No content found in response.")
+    if bad: return agent_messed_up(content, "No content found in response. This is often caused by the server failing to parse a malformed function call. Make sure all double quotes in string arguments are properly escaped with a backslash.")
 
     callidx = -1
     textidx = -1
