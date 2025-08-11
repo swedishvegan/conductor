@@ -49,7 +49,7 @@ void copyfiles(const std::vector<std::string>& includes, const std::string& dir,
             if (entry->d_type == DT_REG && name.size() > 4) {
                 if (hllonly && name.substr(name.size() - 4) != ".hll") continue;
                 std::ifstream src(path + "/" + name, std::ios::binary);
-                std::ofstream dst(dir + "/" + (hllonly ? "" : "global.") + name, std::ios::binary);
+                std::ofstream dst(dir + "/" + name, std::ios::binary);
                 dst << src.rdbuf();
             }
         }
@@ -58,16 +58,17 @@ void copyfiles(const std::vector<std::string>& includes, const std::string& dir,
     }
 }
 
-bool deletefolder(const std::string& dir) { // chatgpt
-    std::cout << "Are you sure? Type \"I am sure\" to proceed: ";
-    std::string confirmation;
-    std::getline(std::cin, confirmation);
+bool deletefolder(const std::string& dir, bool force) { // chatgpt
+    if (!force) {
+        std::cout << "Are you sure? Type \"I am sure\" to proceed: ";
+        std::string confirmation;
+        std::getline(std::cin, confirmation);
 
-    if (confirmation != "I am sure") {
-        std::cout << "Aborted.\n";
-        return false;
+        if (confirmation != "I am sure") {
+            std::cout << "Aborted.\n";
+            return false;
+        }
     }
-
     struct stat info;
     if (stat(dir.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) {
         std::cout << "Directory does not exist or is not valid: " << dir << "\n";
@@ -243,7 +244,7 @@ void query() {
 
 }
 
-void delete_(const std::string& pname) {
+void delete_(const std::string& pname, bool force) {
 
     auto projects = json::loadFromFile(hll_projects_folder "projects.json", true);
     auto& dict = projects->getDict();
@@ -251,7 +252,7 @@ void delete_(const std::string& pname) {
     if (dict.find(pname) == dict.end())
         throw std::runtime_error("Project with name '" + pname + "' does not exist");
 
-    if (!deletefolder(dict[pname]->getString())) return;
+    if (!deletefolder(dict[pname]->getString(), force)) return;
     dict.erase(pname);
     projects->save(hll_projects_folder "projects.json");
 
@@ -261,13 +262,13 @@ int main(int argc, char** argv) { // chatgpt
     std::signal(SIGINT, handle_sigint);
 
     if (argc < 2) {
-        std::cerr << "No command provided. Usage [create/run/resume/query/delete/killserver]\n";
+        std::cerr << "No command provided. Usage [create/run/resume/query/delete/kill_server]\n";
         return 1;
     }
 
     std::string cmd = argv[1];
 
-    if (cmd == "killserver") {
+    if (cmd == "kill_server") {
         kill_server();
         return 0;
     }
@@ -304,8 +305,8 @@ int main(int argc, char** argv) { // chatgpt
         } else if (cmd == "query") {
             query();
         } else if (cmd == "delete") {
-            if (argc != 3) throw std::runtime_error("Usage: delete [pname]");
-            delete_(argv[2]);
+            if (argc < 3 || argc > 4) throw std::runtime_error("Usage: delete [pname] [--force (optional)]");
+            delete_(argv[2], argc == 4 ? (std::string(argv[3]) == "--force") : false);
         } else {
             throw std::runtime_error("Unknown command: " + cmd);
         }

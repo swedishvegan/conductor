@@ -103,7 +103,7 @@ std::string pverr(const std::string& aname, int line, const std::string& actname
     );
 }
 
-void validateargs(const std::string& aname, const std::string& actname, int line, pjson args, bool isuser) {
+void checkifcmdexists(const std::string& aname, const std::string& actname, int line) {
 
     if (!ALL_LEGAL_COMMANDS) loadcommands();
     
@@ -116,6 +116,12 @@ void validateargs(const std::string& aname, const std::string& actname, int line
                 "Command does not exist"
             )
         );
+
+}
+
+void validateargs(const std::string& aname, const std::string& actname, int line, pjson args, bool isuser) {
+
+    checkifcmdexists(aname, actname, line);
 
     ValidationResult res;
     validate_arguments(res, args, ALL_LEGAL_COMMANDS->getDict()[actname]);
@@ -413,6 +419,8 @@ void parse(dialogues& d, const std::vector<std::string>& paths) {
 
                     std::string actname = getname(dial.code, ptl.start, ptl.len, *r);
                     actiondata data { actname, json::makeDict() };
+
+                    checkifcmdexists(aname, actname, ptl.line);
 
                     if (curaction->tok == useraction)
                         std::dynamic_pointer_cast<inst_action>(curaction)->actions.push_back(data);

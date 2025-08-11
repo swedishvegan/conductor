@@ -1,13 +1,16 @@
 import json
 import re
+from pathlib import Path
 
-MODULE_DESCRIPTION_R = "Module name argument. Can be the name of any module that you have read-access to. Can also be one of the following special keywords: `.dependencies` denotes all dependencies of the current module; `.children` denotes all children of the current module; `.` denotes the current module; `*` denotes all modules that you have read-access to."
+MODULE_DESCRIPTION_R = "Module name argument. Can be the name of any module that you have read-access to. Can also be one of the following special keywords: `.children` denotes all children of the current module; `.` denotes the current module; `*` denotes all modules that you have read-access to."
 
 MODULE_DESCRIPTION_W = "Module name argument. Can be the name of any module that you have write-access to. Use `.` to denote the current module."
 
-PATH_DESCRIPTION_R = "Name of the file. This argument supports the `*` wildcard, so patterns like `*.txt` may be used."
+PATH_DESCRIPTION_R = "Name of the file. This argument supports the `*` wildcard, so patterns like `*.txt` may be used. Must **not** contain `/`."
 
-PATH_DESCRIPTION_W = "Name of the file. Wildcards not supported."
+PATH_DESCRIPTION_W = "Name of the file. Wildcards not supported. Must **not** contain `/`."
+
+PURE_ASCII_WARNING = "**Content must be valid 8-bit ASCII.** Use a backslash to escape double quotes or other backslashes."
 
 NO_OP_COMMAND = {
     "name": "no_op",
@@ -88,7 +91,7 @@ WRITE_COMMAND = {
             },
             "content": {
                 "type": "string",
-                "description": "Content to write to the file"
+                "description": "Content to write to the file. " + PURE_ASCII_WARNING
             }
         },
         "required": ["module", "path", "content"]
@@ -111,7 +114,7 @@ APPEND_COMMAND = {
             },
             "content": {
                 "type": "string",
-                "description": "Content to append to the file"
+                "description": "Content to append to the file. " + PURE_ASCII_WARNING
             }
         },
         "required": ["module", "path", "content"]
@@ -135,7 +138,7 @@ EDIT_COMMAND = {
             "new_lines": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Content that will replace the specified file line range"
+                "description": "Content that will replace the specified file line range. " + PURE_ASCII_WARNING
             },
             "start_line": {
                 "type": "integer",
@@ -152,7 +155,7 @@ EDIT_COMMAND = {
 
 QUERY_MODULES_COMMAND = {
     "name": "query_modules",
-    "description": "List all existing modules, filtered into three subcategories: (1) children of the current module, (2) dependencies of the current module, (3) all other modules",
+    "description": "List all existing modules and provide information on the local module topology",
     "parameters": {
         "type": "object",
         "properties": {},
@@ -162,21 +165,16 @@ QUERY_MODULES_COMMAND = {
 
 CREATE_MODULE_COMMAND = {
     "name": "create_module",
-    "description": "Create a new module and explicitly declare its dependencies",
+    "description": "Create a new module",
     "parameters": {
         "type": "object",
         "properties": {
-            "dependencies": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Dependencies may ONLY include (1) the current module, or (2) any dependencies of the current module; allowed to be an empty array"
-            },
             "module_name": {
                 "type": "string",
                 "description": "Must not clash with any existing module names"
             }
         },
-        "required": ["module_name", "dependencies"]
+        "required": ["module_name"]
     }
 }
 
@@ -214,15 +212,15 @@ def _get_arg(res, arg, default=""):
     return res[arg] if arg in res.keys() else default
 
 def _can_read(module, target, dgraph):
-    return module == target or target == "global" or target in dgraph["children"][module] or target in dgraph["dependencies"][module]
+    return True # module == target or target == "global" or target in dgraph["children"][module] or target in dgraph["dependencies"][module]
 
 def _can_write(module, target, dgraph):
     return module == target or target == "global" or target in dgraph["children"][module]
 
 def _validate_fsop(module, target, dgraph, accessty):
-    if target == ".dependencies":
+    '''if target == ".dependencies":
         if accessty != "r": raise RuntimeError(f"Dependency modules are read-only.")
-        return
+        return'''
     if target in [".children", "*", "."]: return
     if target not in dgraph["modules"]: raise RuntimeError(f"Invalid module pattern `{target}`.")
     if not _can_read(module, target, dgraph) if accessty == "r" else _can_write(module, target, dgraph): 
@@ -230,10 +228,10 @@ def _validate_fsop(module, target, dgraph, accessty):
 
 def _get_modules(module, target, dgraph, accessty):
     _validate_fsop(module, target, dgraph, accessty)
-    if target == ".dependencies": return dgraph["dependencies"][module]
+    #if target == ".dependencies": return dgraph["dependencies"][module]
     if target == ".children": return dgraph["children"][module]
     if target == ".": return [module]
-    if target == "*": return [module, "global"] + dgraph["children"][module] + (dgraph["dependencies"][module] if accessty == "r" else [])
+    if target == "*": return dgraph["modules"] # [module, "global"] + dgraph["children"][module] + (dgraph["dependencies"][module] if accessty == "r" else [])
     return [target]
 
 def _format_re(arg):
@@ -244,19 +242,28 @@ def _populate_paths(target, pattern, args, candidates):
         if re.fullmatch(pattern, c) is not None:
             args.append([target, c])
 
+def _get_full_path(proot, target, path):
+    if target == "global":
+        return proot + path
+    return proot + target + "/" + path
+
 def _read_file(proot, target, path):
-    with open(proot + target + "." + path, "r") as f: return f.read()
+    with open(_get_full_path(proot, target, path), "r") as f: return f.read()
 
 def _write_file(proot, target, path, content, accessty):
-    with open(proot + target + "." + path, accessty) as f: f.write(content)
+    path = _get_full_path(proot, target, path)
+    Path(path).parent.mkdir(parents = True, exist_ok = True)
+    with open(path, accessty) as f: f.write(content)
 
 
 def _read_file_lines(proot, target, path):
-    with open(proot + target + "." + path, "r") as f:
+    with open(_get_full_path(proot, target, path), "r") as f:
         return f.readlines()
 
 def _write_file_lines(proot, target, path, content, lines, sline, eline): #inclusive on both ends
-    with open(proot + target + "." + path, "w") as f:
+    path = _get_full_path(proot, target, path)
+    Path(path).parent.mkdir(parents = True, exist_ok = True)
+    with open(path, "w") as f:
         newcontent = ""
         for (i, page) in enumerate(lines):
             if i < sline or i > eline: newcontent += page
@@ -267,6 +274,8 @@ def _setup_fsop(res, module, dgraph, accessty):
 
     module_arg = _get_arg(res, "module", module).strip()
     path_arg = _get_arg(res, "path").strip()
+
+    if '/' in path_arg: raise RuntimeError(f"Illegal path argument `{path_arg}` contains the character `/`. Not allowed to create subdirectories inside a module.")
 
     if accessty == "r":
         targets = _get_modules(module, module_arg, dgraph, accessty)
@@ -351,7 +360,7 @@ def cmd_read_lines(proot, res, module, dgraph):
     res = []
     for path in paths:
         lines = _read_file_lines(proot, path[0], path[1])
-        res.append("\n".join([f"Line {ln}: ```{lines[ln]}```" for ln in range(len(lines))]))
+        res.append(f"Contents of file `{path[0]}/{path[1]}`:\n" + "\n".join([f"Line {ln}: ```{lines[ln]}```" for ln in range(len(lines))]))
 
     return res, False
 
@@ -378,13 +387,11 @@ def cmd_edit(proot, res, module, dgraph):
 
 def cmd_query_modules(proot, res, module, dgraph):
 
-    deps = dgraph["dependencies"][module]
+    #deps = dgraph["dependencies"][module]
     children = dgraph["children"][module]
     allmodules = dgraph["modules"]
     return [(
-        f"Current module: `{module}`\nDependencies of current module: `" + 
-        ("`, `".join(deps) if len(deps) > 0 else "[none]") +
-        "`\nChildren of current module: `" + 
+        f"Current module: `{module}`\nChildren of current module: `" + 
         ("`, `".join(children) if len(children) > 0 else "[none]") +
         "`\nAll modules: `" +
         "`, `".join(allmodules) + "`"
@@ -397,15 +404,15 @@ def cmd_create_module(proot, res, module, dgraph):
     if len(module_arg) == 0 or module_arg.isspace(): raise RuntimeError("Module name missing or empty.")
     if module_arg in dgraph["modules"]: raise RuntimeError(f"There is already a module named `{module_arg}`.")
 
-    deps_arg = _get_arg(res, "dependencies", [])
+    '''deps_arg = _get_arg(res, "dependencies", [])
     deps_arg = [ dep.strip() for dep in deps_arg ]
 
     for dep in deps_arg:
         if not (dep in dgraph["dependencies"][module] or dep in dgraph["children"][module] or dep == module):
-            raise RuntimeError(f"Invalid dependency module `{dep}`.")
+            raise RuntimeError(f"Invalid dependency module `{dep}`.")'''
 
     dgraph["modules"].append(module_arg)
-    dgraph["dependencies"][module_arg] = deps_arg
+    #dgraph["dependencies"][module_arg] = deps_arg
     dgraph["children"][module_arg] = []
     dgraph["files"][module_arg] = []
     dgraph["children"][module].append(module_arg)

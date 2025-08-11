@@ -100,7 +100,9 @@ struct interpreter {
             case info: {
 
                 auto x = std::dynamic_pointer_cast<inst_textblock>(in);
-                std::cout << x->text;
+                std::cout << curmodule << ": " << x->text;
+                if (x->text[x->text.size() - 1] != '\n') std::cout << "\n";
+                std::cout << std::flush;
                 break;
 
             }
@@ -281,20 +283,20 @@ struct interpreter {
                     }
                 }
 
-                std::cout << rep;
+                std::cout << curmodule << ": " << rep;
                 if (rep[rep.size() - 1] != '\n') std::cout << "\n";
                 std::cout << std::flush;
                 break;
 
             }
             case pause_: {
-                std::cout << "[ enter anything to resume ]" << std::flush;
+                std::cout << curmodule << ": " << "[ enter anything to resume ]" << std::flush;
                 std::string x;
                 std::getline(std::cin, x);
                 break;
             }
             case prompt: {
-                std::cout << ">>> " << std::flush;
+                std::cout << curmodule << ":\n>>> " << std::flush;
                 std::string x; std::getline(std::cin, x);
                 ctx->getList().push_back(gencontextelement(x));
 
